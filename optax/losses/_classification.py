@@ -750,7 +750,7 @@ def ctc_loss_with_forward_probs(
   # pyrefly: ignore[bad-index]
   utils.check_shapes_equal(logits[..., 0], logit_paddings)
   # pyrefly: ignore [missing-attribute]
-  batchsize, unused_maxinputlen, num_classes = logits.shape
+  batchsize, unused_maxinputlen, _ = logits.shape
   # pyrefly: ignore [missing-attribute]
   batchsize_of_labels, maxlabellen = labels.shape
   if batchsize_of_labels != batchsize:
@@ -770,8 +770,17 @@ def ctc_loss_with_forward_probs(
   logprobs_phi = logprobs[:, :, blank_id : blank_id + 1]  # [B, T, 1]
   logprobs_phi = jnp.transpose(logprobs_phi, (1, 0, 2))  # [T, B, 1]
 
-  one_hot = jax.nn.one_hot(labels, num_classes=num_classes)  # [B, N, K]
-  logprobs_emit = jnp.einsum('btk,bnk->btn', logprobs, one_hot)
+  # Gather the log-probability of every reference label instead of contracting
+  # with a one-hot matrix: that contraction evaluates `0 * -inf = nan` when a
+  # class is given zero probability by a `-inf` logit, which poisons the whole
+  # loss. `fill_value=0.0` keeps the out-of-range (padding) behaviour of
+  # `one_hot`, which maps such labels to zeros.
+  emit_indices = jnp.broadcast_to(
+      labels[:, None, :], (batchsize, unused_maxinputlen, maxlabellen)
+  )
+  logprobs_emit = jnp.take_along_axis(
+      logprobs, emit_indices, axis=-1, mode='fill', fill_value=0.0
+  )
   logprobs_emit = jnp.transpose(logprobs_emit, (1, 0, 2))  # [T, B, N]
 
   logalpha_phi_init = (
